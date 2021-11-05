@@ -12,7 +12,7 @@ from torch.distributions.multivariate_normal import MultivariateNormal
 GAMMA = 0.99
 ENTROPY_COEFF = 0.001
 EPS = 1e-6
-BATCH_SIZE = 128
+BATCH_SIZE = 64
 ALPHA = 10
 STATE_DIM = 2
 TRAJ_LEN = 25
@@ -34,7 +34,7 @@ random.seed(SEED)
 torch.manual_seed(SEED)
 
 box = BoxWorld()
-sac = SAC(STATE_DIM + NB_SKILLS, 2)
+reinforce = REINFORCE(STATE_DIM + NB_SKILLS, 2)
 # policy_function = GaussianPolicyFunction(STATE_DIM + NB_SKILLS, 2)
 # value_function = ValueFunction(STATE_DIM + NB_SKILLS)
 # policy = GaussianPolicy()
@@ -92,7 +92,6 @@ metrics = {'step': [],
            }
 
 variational_buffer = deque([], maxlen=10000)
-replay_buffer = deque([], maxlen=1000)
 
 step = 0
 ep = 0
@@ -121,11 +120,20 @@ for i in range(20000):
     goal_w_logprobs = goal_logprobs[:, w]
     Hgw = - (goal_w_logprobs.exp() * goal_w_logprobs).sum().item()
     goal_probs = goal_w_logprobs.exp().numpy()
+    # rollout
+    states = []
+    rewards = []
+    logprobs = []
+    entropies = []
     while not done:
         prev_s = s
         s = torch.Tensor(np.concatenate((s, w_onehot)))
+        states.append(s)
         # get action and logprobs
-        unscaled_action, logprob, _ = sac.policy.sample(s.unsqueeze(0))
+        # unscaled_action, logprob, entropy = reinforce.policy.sample(s.unsqueeze(0))
+        unscaled_action, logprob, entropy = reinforce.policy.forward(*reinforce.policy_func(s))
+        logprobs.append(logprob.squeeze())
+        entropies.append(entropy.squeeze())
         # step the environment
         unscaled_action = unscaled_action.squeeze().detach().numpy()
         action = box.scale_action(unscaled_action)
@@ -133,40 +141,30 @@ for i in range(20000):
         _, dr = d(torch.Tensor(s).unsqueeze(0))
         diversity_reward = dr[0,w].item() + SKILL_ENT
         # compute extrinsic reward
-        r = compute_rewards(prev_s, s)
+        # r = compute_rewards(prev_s, s)
         # extrinsic_reward = np.dot(goal_probs, r)
         # extrinsic_reward = -Hgw
         # extrinsic_reward = r[0]
         # total_reward = diversity_reward + 10*extrinsic_reward
-        total_reward =  diversity_reward / 10
-        if done:
-            total_reward += -Hgw + Hg
-        # total_reward = extrinsic_reward
+        total_reward = diversity_reward
+        # if done:
+        #     total_reward += -Hgw + Hg
+        rewards.append(total_reward)
         # metrics
         ep_reward += total_reward
         ep_diversity_reward += diversity_reward
         # ep_extrinsic_reward += extrinsic_reward
-        replay_buffer.append((np.concatenate((prev_s, w_onehot)),
-                              unscaled_action,
-                              total_reward,
-                              np.concatenate((s, w_onehot)),
-                              done,))
         variational_buffer.append((s, w))
         step += 1
-        if step > 1000:
-            ################################# RL ###############################
-            idxs = np.random.randint(len(replay_buffer), size=BATCH_SIZE)
-            batch = [replay_buffer[idx] for idx in idxs]
-            batch = zip(*batch)
-            policy_loss, value_loss, alpha, entropy, neg_logprob, value = sac.update(batch)
-            metrics['policy_loss'].append(policy_loss)
-            metrics['value_loss'].append(value_loss)
-            metrics['alpha'].append(alpha)
-            metrics['entropy'].append(entropy)
-            metrics['neg_logprob'].append(neg_logprob)
-            metrics['value'].append(value)
-    if step > 1000:
-        ########################### Discriminator ##########################
+    ################################# RL ###############################
+    rollout = (states, rewards, logprobs, entropies)
+    policy_loss, value_loss, value, entropy = reinforce.update(rollout)
+    metrics['policy_loss'].append(policy_loss)
+    metrics['value_loss'].append(value_loss)
+    metrics['entropy'].append(entropy)
+    metrics['value'].append(value)
+    ########################### Discriminator ##########################
+    if ep > 100:
         idxs = np.random.randint(len(variational_buffer), size=BATCH_SIZE)
         batch = [variational_buffer[idx] for idx in idxs]
         batch = zip(*batch)
@@ -202,11 +200,11 @@ for i in range(20000):
     print("EPISODE ", ep, "REWARD = {:.2f}".format(ep_reward))
     if step % 1000 == 0:
         # save networks!
-        torch.save(sac.to_save(), 'models/{}/{}/sac_seed{}.pth'.format(
+        torch.save(reinforce.to_save(), '../models/{}/{}/reinforce_seed{}.pth'.format(
             COND, len(TASKS), SEED))
-        torch.save(d.state_dict(), 'models/{}/{}/variational_seed{}.pth'.format(
+        torch.save(d.state_dict(), '../models/{}/{}/variational_seed{}.pth'.format(
             COND, len(TASKS), SEED))
-        torch.save(clusters, 'models/{}/{}/clusters_seed{}.pth'.format(
+        torch.save(clusters, '../models/{}/{}/clusters_seed{}.pth'.format(
             COND, len(TASKS), SEED))
-        pickle.dump(metrics, open('models/{}/{}/metrics_seed{}.pkl'.format(
+        pickle.dump(metrics, open('../models/{}/{}/metrics_seed{}.pkl'.format(
             COND, len(TASKS), SEED), 'wb'))

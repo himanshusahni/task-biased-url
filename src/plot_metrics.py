@@ -8,7 +8,7 @@ TASKS = [(1., 0.8), (0.33, 0.8), (-0.33, 0.8), (-1, 0.8)]
 WINDOW = 25
 
 
-metrics = pickle.load(open('models/{}/{}/metrics_seed{}.pkl'.format(COND, len(TASKS), SEED), 'rb'))
+metrics = pickle.load(open('../models/{}/{}/metrics_seed{}.pkl'.format(COND, len(TASKS), SEED), 'rb'))
 fig, axarr = plt.subplots(3,2, figsize=(24,16))
 x = [i/25 for i in metrics['step']]
 
@@ -46,7 +46,7 @@ axarr[1,1].set_title("Average Q Value")
 # axarr[2,0].scatter(range(len(metrics['neg_logprob'])), metrics['neg_logprob'])
 # axarr[2,0].set_title("neg logprob")
 
-axarr[2,1].scatter(range(len(metrics['alpha'])), metrics['alpha'])
-axarr[2,1].set_title("Alpha")
+# axarr[2,1].scatter(range(len(metrics['alpha'])), metrics['alpha'])
+# axarr[2,1].set_title("Alpha")
 
-plt.savefig('imgs/{}/{}/metrics_{}.png'.format(COND, len(TASKS), SEED))
+plt.savefig('../imgs/{}/{}/metrics_{}.png'.format(COND, len(TASKS), SEED))

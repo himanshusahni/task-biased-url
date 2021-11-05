@@ -5,6 +5,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.distributions import Normal
+from torch.distributions.multivariate_normal import MultivariateNormal
 from torch.distributions.categorical import Categorical
 import torch.optim as optim
 
@@ -23,7 +24,7 @@ class GaussianPolicyFunction(nn.Module):
         """return: action between [-1,1]"""
         x = F.leaky_relu(self.fc1(x), 0.2)
         x = F.leaky_relu(self.fc2(x), 0.2)
-        return torch.tanh(self.mu_out(x)), torch.tanh(self.sigma_out(x))
+        return torch.tanh(self.mu_out(x)), F.softplus(self.sigma_out(x))
 
 
 class DiscretePolicyFunction(nn.Module):
@@ -91,29 +92,59 @@ class SkillDiscriminator(nn.Module):
         return logits, nn.LogSoftmax(dim=1)(logits)
 
 
+# class GaussianPolicy:
+#     """Gaussian policy with a learned sigma"""
+
+#     def __init__(self, policy_func):
+#         """
+#         policy_function is a neural network that outputs action mean between
+#         and log standard deviation
+#         """
+#         self.policy_func = policy_func
+#         self.min_logstd = -5
+#         self.max_logstd = 2
+
+#     def sample(self, s):
+#         mu, logstd = self.policy_func(s)
+#         # # rescale logstd between min and max
+#         # logstd = ((logstd + 1) / 2) * (self.max_logstd - self.min_logstd)
+#         # logstd += self.min_logstd
+#         # dist = Normal(mu, logstd.sqrt())
+#         dist = MultivariateNormal(mu, torch.stack([torch.diag(std) for std in logstd]))
+#         action = dist.rsample()
+#         logprob = dist.log_prob(action)
+#         # squash action again in [-1, 1]
+#         # action = torch.tanh(action)
+#         entropy = dist.entropy()
+#         return action, logprob, entropy
+
+class GaussianPolicyFunction(nn.Module):
+    """fully connected 200x200 hidden layers"""
+
+    def __init__(self, state_dim, action_dim):
+        super(GaussianPolicyFunction, self).__init__()
+        self.fc1 = nn.Linear(state_dim, 200)
+        self.fc2 = nn.Linear(200, 200)
+        self.mu_out = nn.Linear(200, action_dim)
+        self.sigma_out = nn.Linear(200, action_dim)
+
+    def forward(self, x):
+        """return: action between [-1,1]"""
+        x = F.leaky_relu(self.fc1(x), 0.2)
+        x = F.leaky_relu(self.fc2(x), 0.2)
+        return torch.tanh(self.mu_out(x)), F.softplus(self.sigma_out(x))
+
+
 class GaussianPolicy:
     """Gaussian policy with a learned sigma"""
 
-    def __init__(self, policy_func):
-        """
-        policy_function is a neural network that outputs action mean between
-        and log standard deviation
-        """
-        self.policy_func = policy_func
-        self.min_logstd = -5
-        self.max_logstd = 2
-
-    def sample(self, s):
-        mu, logstd = self.policy_func(s)
-        # rescale logstd between min and max
-        logstd = ((logstd + 1) / 2) * (self.max_logstd - self.min_logstd)
-        logstd += self.min_logstd
-        dist = Normal(mu, logstd.exp())
-        action = dist.rsample()
-        logprob = dist.log_prob(action).sum(dim=-1)
-        # squash action again in [-1, 1]
-        # action = torch.tanh(action)
-        entropy = dist.entropy().mean(dim=-1)
+    def forward(self, mu, sigma):
+        dist = MultivariateNormal(mu, torch.diag(sigma + 0.01))
+        # dist = MultivariateNormal(mu, 0.1*torch.eye(2))
+        action = dist.sample()
+        # action = torch.clamp(action, -1, 1)
+        logprob = dist.log_prob(action)
+        entropy = dist.entropy()
         return action, logprob, entropy
 
 
@@ -141,13 +172,14 @@ class REINFORCE:
         # policy
         self.policy_func = GaussianPolicyFunction(state_dim, action_dim)
         self.policy_optimizer = optim.Adam(self.policy_func.parameters(), lr=1e-4)
-        self.policy = GaussianPolicy(self.policy_func)
+        # self.policy = GaussianPolicy(self.policy_func)
+        self.policy = GaussianPolicy()
         # value
         self.value_function = ValueFunction(state_dim)
-        self.value_optimizer = optim.Adam(value_function.parameters(), lr=1e-3)
+        self.value_optimizer = optim.Adam(self.value_function.parameters(), lr=1e-3)
         # misc
         self.gamma = 0.99
-        self.entropy_coeff = 0.01
+        self.entropy_coeff = 0.001
 
     def to_save(self):
         return {
@@ -157,9 +189,9 @@ class REINFORCE:
             'value_optim': self.value_optimizer.state_dict(),
         }
 
-    def update(rollout):
+    def update(self, rollout):
         """
-        rollout consists of a tuple of (states(+w), rewards, logprobs, entropies)
+        rollout consists of a tuple of lists of (states(+w), rewards, logprobs, entropies)
         """
         states, rewards, logprobs, entropies = rollout
         # calculate discounted return for each step at end of episode.
@@ -170,7 +202,7 @@ class REINFORCE:
         R = np.flip(np.array(R))
         rewards = np.flip(rewards)
         # calculate single step value target
-        values = value_function(states)
+        values = self.value_function(torch.stack(states)).squeeze()
         targets = rewards[:-1] + self.gamma * values[1:].detach().numpy()
         targets = np.append(targets, rewards[-1])
         # REINFORCE
@@ -180,12 +212,12 @@ class REINFORCE:
         policy_loss = - sum([R[i]*logprobs[i] for i in range(len(R))])/len(R)
         entropy_loss = - sum(entropies)/len(entropies)
         loss = value_loss + policy_loss + self.entropy_coeff * entropy_loss
-        policy_optimizer.zero_grad()
-        value_optimizer.zero_grad()
+        self.policy_optimizer.zero_grad()
+        self.value_optimizer.zero_grad()
         loss.backward()
-        policy_optimizer.step()
-        value_optimizer.step()
-        return policy_loss.item(), value_loss.item()
+        self.policy_optimizer.step()
+        self.value_optimizer.step()
+        return policy_loss.item(), value_loss.item(), values.mean().item(), -entropy_loss.item()
 
 
 class SAC:
