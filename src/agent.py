@@ -23,7 +23,7 @@ class GaussianPolicyFunction(nn.Module):
         """return: action between [-1,1]"""
         x = F.leaky_relu(self.fc1(x), 0.2)
         x = F.leaky_relu(self.fc2(x), 0.2)
-        return torch.tanh(self.mu_out(x)), torch.tanh(self.sigma_out(x))
+        return torch.tanh(self.mu_out(x)), F.softplus(self.sigma_out(x))
 
 
 class DiscretePolicyFunction(nn.Module):
@@ -106,11 +106,12 @@ class GaussianPolicy:
     def sample(self, s):
         mu, logstd = self.policy_func(s)
         # rescale logstd between min and max
-        logstd = ((logstd + 1) / 2) * (self.max_logstd - self.min_logstd)
-        logstd += self.min_logstd
-        dist = Normal(mu, logstd.exp())
+        # logstd = ((logstd + 1) / 2) * (self.max_logstd - self.min_logstd)
+        # logstd += self.min_logstd
+        # dist = Normal(mu, logstd.exp())
+        dist = Normal(mu, logstd)
         action = dist.rsample()
-        logprob = dist.log_prob(action).sum(dim=-1)
+        logprob = dist.log_prob(action.detach()).sum(dim=-1)
         # squash action again in [-1, 1]
         # action = torch.tanh(action)
         entropy = dist.entropy().mean(dim=-1)
@@ -197,9 +198,9 @@ class SAC:
         self.policy = GaussianPolicy(self.policy_func)
         # value
         self.q1 = QValueFunction(state_dim, action_dim)
-        self.q1_optimizer = optim.Adam(self.q1.parameters(), lr=1e-3)
+        self.q1_optimizer = optim.Adam(self.q1.parameters(), lr=1e-4)
         self.q2 = QValueFunction(state_dim, action_dim)
-        self.q2_optimizer = optim.Adam(self.q2.parameters(), lr=1e-3)
+        self.q2_optimizer = optim.Adam(self.q2.parameters(), lr=1e-4)
         self.target_q1 = QValueFunction(state_dim, action_dim)
         self.target_q2 = QValueFunction(state_dim, action_dim)
         self.target_q1.load_state_dict(self.q1.state_dict())
@@ -211,7 +212,7 @@ class SAC:
         self.log_alpha = torch.tensor(np.log(init_alpha))
         self.log_alpha.requires_grad = True
         self.alpha_optimizer = optim.Adam([self.log_alpha], lr=1e-4)
-        self.target_entropy = -action_dim / 2
+        self.target_entropy = -action_dim
 
         self.gamma = 0.99
         self.polyak_constant = 0.995
@@ -256,7 +257,8 @@ class SAC:
         q_s_ = torch.cat(q_s_, dim=1)
         q_s_ = q_s_.min(dim=1)[0]
         # V_s_ = self.V(s_)
-        target = r + self.gamma * (q_s_ - self.alpha * logprob_a_)
+        target = r + self.gamma * (1 - d) * (q_s_ - self.alpha * logprob_a_)
+        # target = r + self.gamma * (q_s_)
         # target = r + self.gamma * V_s_
         target = target.detach()
         # create qvalue loss
@@ -279,7 +281,8 @@ class SAC:
         q_s = (self.q1(s, _a), self.q2(s, _a))
         q_s = torch.cat(q_s, dim=1)
         q_s = q_s.min(dim=1)[0]
-        policy_loss = - (q_s - self.alpha * logprob_a)
+        # policy_loss = - (q_s - self.alpha.detach() * logprob_a)
+        policy_loss = - (q_s + self.alpha * entropy)
         policy_loss = policy_loss.mean()
         self.policy_optimizer.zero_grad()
         policy_loss.backward()
@@ -293,10 +296,10 @@ class SAC:
         # self.v_optimizer.zero_grad()
         # value_loss.backward()
         # self.v_optimizer.step()
-        # update alpha
-        alpha_loss = (self.alpha *
-                      (-logprob_a / 2 - self.target_entropy).detach()).mean()
-        self.alpha_optimizer.zero_grad()
-        alpha_loss.backward()
-        self.alpha_optimizer.step()
-        return policy_loss.item(), qvalue_loss.item(), self.alpha.item(), entropy.mean().item(), (-logprob_a / 2).mean().item(), q_s.mean().item()
+        # # update alpha
+        # alpha_loss = (self.alpha *
+        #               (-logprob_a / 2 - self.target_entropy).detach()).mean()
+        # self.alpha_optimizer.zero_grad()
+        # alpha_loss.backward()
+        # self.alpha_optimizer.step()
+        return policy_loss.item(), qvalue_loss.item(), self.alpha.item(), entropy.mean().item(), (-logprob_a_ / 2).mean().item(), q_s.mean().item()
