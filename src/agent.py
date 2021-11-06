@@ -111,8 +111,8 @@ class GaussianPolicy:
         # logstd += self.min_logstd
         # dist = Normal(mu, logstd.sqrt())
         dist = MultivariateNormal(mu, torch.stack([torch.diag(std) for std in logstd]))
-        action = dist.sample()
-        logprob = dist.log_prob(action)
+        action = dist.rsample()
+        logprob = dist.log_prob(action.detach())
         # squash action again in [-1, 1]
         # action = torch.tanh(action)
         entropy = dist.entropy()
