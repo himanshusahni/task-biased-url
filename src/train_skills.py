@@ -35,11 +35,6 @@ torch.manual_seed(SEED)
 
 box = BoxWorld()
 reinforce = REINFORCE(STATE_DIM + NB_SKILLS, 2)
-# policy_function = GaussianPolicyFunction(STATE_DIM + NB_SKILLS, 2)
-# value_function = ValueFunction(STATE_DIM + NB_SKILLS)
-# policy = GaussianPolicy()
-# policy_optimizer = optim.Adam(policy_function.parameters(), lr=1e-4)
-# value_optimizer = optim.Adam(value_function.parameters(), lr=1e-3)
 
 d = SkillDiscriminator(DIM, NB_SKILLS)
 discriminator_optimizer = optim.Adam(d.parameters(), lr=1e-4)
@@ -130,8 +125,7 @@ for i in range(20000):
         s = torch.Tensor(np.concatenate((s, w_onehot)))
         states.append(s)
         # get action and logprobs
-        # unscaled_action, logprob, entropy = reinforce.policy.sample(s.unsqueeze(0))
-        unscaled_action, logprob, entropy = reinforce.policy.forward(*reinforce.policy_func(s))
+        unscaled_action, logprob, entropy = reinforce.policy.sample(s.unsqueeze(0))
         logprobs.append(logprob.squeeze())
         entropies.append(entropy.squeeze())
         # step the environment

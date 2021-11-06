@@ -92,58 +92,29 @@ class SkillDiscriminator(nn.Module):
         return logits, nn.LogSoftmax(dim=1)(logits)
 
 
-# class GaussianPolicy:
-#     """Gaussian policy with a learned sigma"""
-
-#     def __init__(self, policy_func):
-#         """
-#         policy_function is a neural network that outputs action mean between
-#         and log standard deviation
-#         """
-#         self.policy_func = policy_func
-#         self.min_logstd = -5
-#         self.max_logstd = 2
-
-#     def sample(self, s):
-#         mu, logstd = self.policy_func(s)
-#         # # rescale logstd between min and max
-#         # logstd = ((logstd + 1) / 2) * (self.max_logstd - self.min_logstd)
-#         # logstd += self.min_logstd
-#         # dist = Normal(mu, logstd.sqrt())
-#         dist = MultivariateNormal(mu, torch.stack([torch.diag(std) for std in logstd]))
-#         action = dist.rsample()
-#         logprob = dist.log_prob(action)
-#         # squash action again in [-1, 1]
-#         # action = torch.tanh(action)
-#         entropy = dist.entropy()
-#         return action, logprob, entropy
-
-class GaussianPolicyFunction(nn.Module):
-    """fully connected 200x200 hidden layers"""
-
-    def __init__(self, state_dim, action_dim):
-        super(GaussianPolicyFunction, self).__init__()
-        self.fc1 = nn.Linear(state_dim, 200)
-        self.fc2 = nn.Linear(200, 200)
-        self.mu_out = nn.Linear(200, action_dim)
-        self.sigma_out = nn.Linear(200, action_dim)
-
-    def forward(self, x):
-        """return: action between [-1,1]"""
-        x = F.leaky_relu(self.fc1(x), 0.2)
-        x = F.leaky_relu(self.fc2(x), 0.2)
-        return torch.tanh(self.mu_out(x)), F.softplus(self.sigma_out(x))
-
-
 class GaussianPolicy:
     """Gaussian policy with a learned sigma"""
 
-    def forward(self, mu, sigma):
-        dist = MultivariateNormal(mu, torch.diag(sigma + 0.01))
-        # dist = MultivariateNormal(mu, 0.1*torch.eye(2))
+    def __init__(self, policy_func):
+        """
+        policy_function is a neural network that outputs action mean between
+        and log standard deviation
+        """
+        self.policy_func = policy_func
+        self.min_logstd = -5
+        self.max_logstd = 2
+
+    def sample(self, s):
+        mu, logstd = self.policy_func(s)
+        # # rescale logstd between min and max
+        # logstd = ((logstd + 1) / 2) * (self.max_logstd - self.min_logstd)
+        # logstd += self.min_logstd
+        # dist = Normal(mu, logstd.sqrt())
+        dist = MultivariateNormal(mu, torch.stack([torch.diag(std) for std in logstd]))
         action = dist.sample()
-        # action = torch.clamp(action, -1, 1)
         logprob = dist.log_prob(action)
+        # squash action again in [-1, 1]
+        # action = torch.tanh(action)
         entropy = dist.entropy()
         return action, logprob, entropy
 
@@ -172,8 +143,7 @@ class REINFORCE:
         # policy
         self.policy_func = GaussianPolicyFunction(state_dim, action_dim)
         self.policy_optimizer = optim.Adam(self.policy_func.parameters(), lr=1e-4)
-        # self.policy = GaussianPolicy(self.policy_func)
-        self.policy = GaussianPolicy()
+        self.policy = GaussianPolicy(self.policy_func)
         # value
         self.value_function = ValueFunction(state_dim)
         self.value_optimizer = optim.Adam(self.value_function.parameters(), lr=1e-3)

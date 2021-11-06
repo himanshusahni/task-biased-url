@@ -23,7 +23,7 @@ random.seed(SEED)
 torch.manual_seed(SEED)
 
 policy_function = GaussianPolicyFunction(STATE_DIM + NB_SKILLS, 2)
-path = '../models/{}/{}/sac_seed{}.pth'.format(COND, len(TASKS), SEED)
+path = '../models/{}/{}/reinforce_seed{}.pth'.format(COND, len(TASKS), SEED)
 print("visualizing policy from ", path)
 policy_function.load_state_dict(torch.load(path)['policy_func'])
 policy = GaussianPolicy(policy_function)
