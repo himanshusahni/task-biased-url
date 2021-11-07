@@ -41,9 +41,9 @@ class BoxWorld:
         input: action in [-1, 1]
         output: action in appropriate scale for environment
         """
+        a = a.clip(-1, 1)
         a *= 0.1
         return a
-        # return a.clip(-0.1, 0.1)
 
     def sample_goal(self):
         """

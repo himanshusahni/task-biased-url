@@ -24,7 +24,8 @@ class GaussianPolicyFunction(nn.Module):
         """return: action between [-1,1]"""
         x = F.leaky_relu(self.fc1(x), 0.2)
         x = F.leaky_relu(self.fc2(x), 0.2)
-        return torch.tanh(self.mu_out(x)), F.softplus(self.sigma_out(x))
+        # return torch.tanh(self.mu_out(x)), F.softplus(self.sigma_out(x))
+        return torch.tanh(self.mu_out(x)), torch.tanh(self.sigma_out(x))
 
 
 class DiscretePolicyFunction(nn.Module):
@@ -101,21 +102,20 @@ class GaussianPolicy:
         and log standard deviation
         """
         self.policy_func = policy_func
-        self.min_logstd = -5
+        self.min_logstd = -2
         self.max_logstd = 2
 
     def sample(self, s):
         mu, logstd = self.policy_func(s)
-        # # rescale logstd between min and max
-        # logstd = ((logstd + 1) / 2) * (self.max_logstd - self.min_logstd)
-        # logstd += self.min_logstd
-        # dist = Normal(mu, logstd.sqrt())
-        dist = MultivariateNormal(mu, torch.stack([torch.diag(std) for std in logstd]))
+        # rescale logstd between min and max
+        logstd = ((logstd + 1) / 2) * (self.max_logstd - self.min_logstd)
+        logstd += self.min_logstd
+        dist = Normal(mu, logstd.exp())
         action = dist.rsample()
-        logprob = dist.log_prob(action.detach())
+        logprob = dist.log_prob(action.detach()).sum(dim=-1)
         # squash action again in [-1, 1]
         # action = torch.tanh(action)
-        entropy = dist.entropy()
+        entropy = dist.entropy().mean(dim=-1)
         return action, logprob, entropy
 
 
