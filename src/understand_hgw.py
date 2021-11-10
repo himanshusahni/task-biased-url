@@ -47,12 +47,13 @@ print(calculate_goal_w_metrics(clusters, 1))
 # plt.show()
 
 # slowly rotate one of the skills
-fig, ax = plt.subplots(3, 1, figsize=(4,24))
+fig, ax = plt.subplots(3, 2, figsize=(8,24))
 xs = []
 ys = []
 Hgws = []
 max_g_probs = []
 sum_g_probs = []
+Hgs = []
 for xi in range(40):
     for yi in range(40):
         x = -1 + xi*2/40
@@ -67,23 +68,42 @@ for xi in range(40):
         Hgws.append(Hgw)
         max_g_probs.append(max_g_prob)
         sum_g_probs.append(sum_g_prob)
+        goal_logprobs = clusters.log_prob(goals).sum(dim=-1)
+        log_pg = logsumexp(goal_logprobs, dim=1)
+        Hg =  - (log_pg.exp() * (log_pg - SKILL_ENT)).sum().item()
+        Hgs.append(Hg)
+# Hgws
 Hgws = np.array(Hgws)
 Hgws = -1*Hgws
-Hgws -= Hgws.min()
-Hgws /= Hgws.max()
-ax[0].scatter(xs, ys, c=Hgws, cmap='plasma')
-ax[0].plot(*list(zip(*TASKS)), 'x')
-ax[0].plot(*list(zip(*[(0.66, 0.6), (-0.33, 0.6), (-0.66, 0.6)])), 'o')
+# Hgws -= Hgws.min()
+# Hgws /= Hgws.max()
+ax[0,0].scatter(xs, ys, c=Hgws, cmap='jet')
+ax[0,0].plot(*list(zip(*TASKS)), 'x')
+ax[0,0].plot(*list(zip(*[(0.66, 0.6), (-0.33, 0.6), (-0.66, 0.6)])), 'o')
+# maxs
 max_g_probs = np.array(max_g_probs)
-max_g_probs -= max_g_probs.min()
-max_g_probs /= max_g_probs.max()
-ax[1].scatter(xs, ys, c=max_g_probs, cmap='plasma')
-ax[1].plot(*list(zip(*TASKS)), 'x')
-ax[1].plot(*list(zip(*[(0.66, 0.6), (-0.33, 0.6), (-0.66, 0.6)])), 'o')
-sum_g_probs = np.array(sum_g_probs)
-sum_g_probs -= sum_g_probs.min()
-sum_g_probs /= sum_g_probs.max()
-ax[2].scatter(xs, ys, c=sum_g_probs, cmap='plasma')
-ax[2].plot(*list(zip(*TASKS)), 'x')
-ax[2].plot(*list(zip(*[(0.66, 0.6), (-0.33, 0.6), (-0.66, 0.6)])), 'o')
+# max_g_probs -= max_g_probs.min()
+# max_g_probs /= max_g_probs.max()
+ax[1,0].scatter(xs, ys, c=max_g_probs, cmap='jet')
+ax[1,0].plot(*list(zip(*TASKS)), 'x')
+ax[1,0].plot(*list(zip(*[(0.66, 0.6), (-0.33, 0.6), (-0.66, 0.6)])), 'o')
+# Hgs
+Hgs = np.array(Hgs)
+# Hgs -= Hgs.min()
+# Hgs /= Hgs.max()
+ax[2,0].scatter(xs, ys, c=Hgs , cmap='jet')
+ax[2,0].plot(*list(zip(*TASKS)), 'x')
+ax[2,0].plot(*list(zip(*[(0.66, 0.6), (-0.33, 0.6), (-0.66, 0.6)])), 'o')
+# Hgws + max
+ax[0,1].scatter(xs, ys, c=(max_g_probs+Hgws), cmap='jet')
+ax[0,1].plot(*list(zip(*TASKS)), 'x')
+ax[0,1].plot(*list(zip(*[(0.66, 0.6), (-0.33, 0.6), (-0.66, 0.6)])), 'o')
+# Hgws + Hg
+ax[1,1].scatter(xs, ys, c=(Hgs+Hgws), cmap='jet')
+ax[1,1].plot(*list(zip(*TASKS)), 'x')
+ax[1,1].plot(*list(zip(*[(0.66, 0.6), (-0.33, 0.6), (-0.66, 0.6)])), 'o')
+# Hgws + Hg + max
+ax[2,1].scatter(xs, ys, c=(Hgs+max_g_probs), cmap='jet')
+ax[2,1].plot(*list(zip(*TASKS)), 'x')
+ax[2,1].plot(*list(zip(*[(0.66, 0.6), (-0.33, 0.6), (-0.66, 0.6)])), 'o')
 plt.show()

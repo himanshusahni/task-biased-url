@@ -2,18 +2,20 @@ import numpy as np
 import matplotlib.pyplot as plt
 import random
 from collections import OrderedDict
+from matplotlib.patches import Ellipse
 
 from boxenv import *
 from agent import *
 
 import torch
+from torch.distributions.multivariate_normal import MultivariateNormal
 
 NB_SKILLS = 6
 COND = 'OUR'
 STATE_DIM = 2
-SEED = 456
+SEED = 123
 # TASKS = [(0.5, 0.8), (-0.5,0.8)]
-TASKS = [(1., 0.8), (0.33, 0.8), (-0.33, 0.8), (-1, 0.8)]
+TASKS = [(0.75, 0.8), (0.25, 0.8), (-0.25, 0.8), (-0.75, 0.8)]
 # TASKS = [(0.8, 0.8), (0.8, -0.8), (-0.8, -0.8), (-0.8, 0.8)]
 # TASKS = [(0.8, 0.8), (0.3, 0.8),  (-0.3, 0.8),  (-0.8, 0.8)]
 # TASKS = [(0.1, 0.1), (0.1, -0.1), (-0.1, -0.1), (-0.1, 0.1)]
@@ -22,8 +24,13 @@ np.random.seed(SEED)
 random.seed(SEED)
 torch.manual_seed(SEED)
 
+best = 0
+
 policy_function = GaussianPolicyFunction(STATE_DIM + NB_SKILLS, 2)
-path = '../models/{}/{}/best_reinforce_seed{}.pth'.format(COND, len(TASKS), SEED)
+if best:
+    path = '../models/{}/{}/best_reinforce_seed{}.pth'.format(COND, len(TASKS), SEED)
+else:
+    path = '../models/{}/{}/reinforce_seed{}.pth'.format(COND, len(TASKS), SEED)
 print("visualizing policy from ", path)
 policy_function.load_state_dict(torch.load(path)['policy_func'])
 policy = GaussianPolicy(policy_function)
@@ -51,10 +58,10 @@ for w in range(NB_SKILLS):
             # step the environment
             unscaled_action = unscaled_action.squeeze().detach().numpy()
             action = box.scale_action(unscaled_action)
-            print("state: ", s.numpy()[:2],
-                  "mean: ", mu.detach().numpy(),
-                  "sigma: ", sigma.detach().numpy(),
-                  "action: ", action)
+            # print("state: ", s.numpy()[:2],
+            #       "mean: ", mu.detach().numpy(),
+            #       "sigma: ", sigma.detach().numpy(),
+            #       "action: ", action)
             s, r, done = box.step(action)
             states.append(s)
         state_x, state_y = zip(*states)
@@ -65,4 +72,31 @@ for i, t in enumerate(TASKS):
 handles, labels = plt.gca().get_legend_handles_labels()
 by_label = OrderedDict(zip(labels, handles))
 plt.legend(by_label.values(), by_label.keys())
+
+# now plot the cluster centers and scales
+if best:
+    path = '../models/{}/{}/best_clusters_seed{}.pth'.format(COND, len(TASKS), SEED)
+else:
+    path = '../models/{}/{}/clusters_seed{}.pth'.format(COND, len(TASKS), SEED)
+clusters = torch.load(path)
+mus = clusters.loc.numpy()
+covs = clusters.covariance_matrix.numpy()
+print("CLUSTER MEANS")
+print(mus)
+print("CLUSTER COVARIANCES")
+print(covs)
+mux, muy = list(zip(*mus))
+ax.scatter(mux, muy, c=color, marker='x')
+for w in range(NB_SKILLS):
+    lambdas, eigvs = np.linalg.eig(covs[w])
+    lambdas = 2 * np.sqrt(3.219 * lambdas)
+    max_lambda = np.argmax(lambdas)
+    min_lambda = np.argmin(lambdas)
+    max_eigv = eigvs[:, max_lambda]
+    theta = math.atan2(max_eigv[1], max_eigv[0])
+    theta = theta * 180 / math.pi
+    ell = Ellipse(xy=mus[w], width=lambdas[max_lambda], height=lambdas[min_lambda], angle=theta)
+    ax.add_artist(ell)
+    ell.set_alpha(0.4)
+    ell.set_facecolor(color[w])
 plt.savefig('../imgs/{}/{}/skills{}.png'.format(COND, len(TASKS), SEED))

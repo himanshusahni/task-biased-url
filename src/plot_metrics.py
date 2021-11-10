@@ -5,8 +5,7 @@ import numpy as np
 SEED = 123
 COND = 'OUR'
 TASKS = [(1., 0.8), (0.33, 0.8), (-0.33, 0.8), (-1, 0.8)]
-WINDOW = 25
-
+WINDOW = 50
 
 metrics = pickle.load(open('../models/{}/{}/metrics_seed{}.pkl'.format(COND, len(TASKS), SEED), 'rb'))
 fig, axarr = plt.subplots(3,2, figsize=(24,16))
@@ -18,30 +17,41 @@ x = [i/25 for i in metrics['step']]
 # axarr[0,1].scatter(x, metrics['policy_loss'])
 # axarr[0,1].set_title("Policy loss")
 
-h = np.convolve(metrics['entropy'], np.ones(WINDOW)/WINDOW, mode='valid')
-axarr[0,0].scatter(range(h.shape[0]), h)
-axarr[0,0].set_title("Policy Entropy")
+# h = np.convolve(metrics['entropy'], np.ones(WINDOW)/WINDOW, mode='valid')
+# axarr[0,0].scatter(range(h.shape[0]), h)
+# axarr[0,0].set_title("Policy Entropy")
 
-# axarr[0].scatter(x, metrics['goal_entropy'])
-# axarr[0].set_title("H(g)")
+axarr[0,0].scatter(x, metrics['goal_entropy'])
+axarr[0,0].set_title("H(g)")
 
 # create running average
 r = np.convolve(metrics['rewards'], np.ones(WINDOW)/WINDOW, mode='valid')
 axarr[0,1].scatter(range(r.shape[0]), r)
 axarr[0,1].set_title("Episodic Reward")
 
-# axarr[1].scatter(x, metrics['goal_w_entropy'])
-# axarr[1].set_title("H(g|w)")
+Hgw, w = zip(*metrics['goal_w_entropy'])
+# color = plt.cm.tab10(np.linspace(0, 1, 6))
+color = ['r', 'b', 'k', 'g', 'y', 'm']
+axarr[1,0].scatter(x, Hgw, color=[color[i] for i in w])
+axarr[1,0].set_title("H(g|w)")
+# axarr[1,0].set_ylim([-40,0])
 
-# axarr[2].scatter(x, metrics['goal_prob'])
-# axarr[2].set_title("p(g)")
+axarr[1,1].scatter(x, metrics['goal_prob'])
+axarr[1,1].set_title("p(g)")
 
-v = np.convolve(metrics['variational_loss'], np.ones(WINDOW)/WINDOW, mode='valid')
-axarr[1,0].scatter(range(v.shape[0]), v)
-axarr[1,0].set_title("Variational loss")
+# create running average
+r = np.convolve(metrics['diversity_rewards'], np.ones(WINDOW)/WINDOW, mode='valid')
+axarr[2,0].scatter(range(r.shape[0]), r)
+axarr[2,0].set_title("Diversity Reward")
 
-axarr[1,1].scatter(range(len(metrics['value'])), metrics['value'])
-axarr[1,1].set_title("Average Q Value")
+axarr[2,1].scatter(range(len(metrics['extrinsic_rewards'])), metrics['extrinsic_rewards'])
+axarr[2,1].set_title("Reward Multiplier")
+# v = np.convolve(metrics['variational_loss'], np.ones(WINDOW)/WINDOW, mode='valid')
+# axarr[1,0].scatter(range(v.shape[0]), v)
+# axarr[1,0].set_title("Variational loss")
+
+# axarr[1,1].scatter(range(len(metrics['value'])), metrics['value'])
+# axarr[1,1].set_title("Average Q Value")
 
 # axarr[2,0].scatter(range(len(metrics['neg_logprob'])), metrics['neg_logprob'])
 # axarr[2,0].set_title("neg logprob")
