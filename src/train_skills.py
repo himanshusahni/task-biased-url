@@ -18,7 +18,7 @@ STATE_DIM = 2
 TRAJ_LEN = 25
 
 # TASKS = [(0.5, 0.8), (-0.5, 0.8)]
-TASKS = [(1., 0.8), (0.33, 0.8), (-0.33, 0.8), (-1, 0.8)]
+TASKS = [(0.75, 0.8), (0.25, 0.8), (-0.25, 0.8), (-0.75, 0.8)]
 # TASKS = [(1., 0.8), (1 - 2./7, 0.8), (1 - 4./7, 0.8), (1 - 6./7, 0.8),
          # (-1 + 6./7, 0.8), (-1 + 4./7, 0.8), (-1 + 2./7, 0.8), (-1., 0.8)]
 DIM = STATE_DIM
@@ -27,7 +27,7 @@ NB_SKILLS = 6
 SKILL_ENT = -math.log(1/NB_SKILLS)
 
 COND = 'OUR'
-SEED = 456
+SEED = 123
 
 np.random.seed(SEED)
 random.seed(SEED)
@@ -61,19 +61,10 @@ def compute_rewards(s1, s2):
         r.append(reward)
     return r
 
-def variational_update(batch):
-    s, w = batch
-    logits, _ = d(torch.Tensor(s))
-    discriminator_loss = CE(logits, torch.LongTensor(w))
-    discriminator_optimizer.zero_grad()
-    discriminator_loss.backward()
-    discriminator_optimizer.step()
-    return discriminator_loss.item()
-
 metrics = {'step': [],
            'rewards': [],
            'diversity_rewards': [],
-           # 'extrinsic_rewards': [],
+           'extrinsic_rewards': [],
            'goal_entropy': [],
            'goal_prob': [],
            'goal_w_entropy': [],
@@ -86,7 +77,26 @@ metrics = {'step': [],
            'variational_loss': [],
            }
 
-variational_buffer = deque([], maxlen=10000)
+# buffer for each skill separately
+variational_buffer = [deque([], maxlen=1500) for _ in range(NB_SKILLS)]
+def sample_buffer():
+    batch = []
+    for i in range(BATCH_SIZE):
+        # first randomly sample a skill
+        w = np.random.randint(NB_SKILLS)
+        # now sample a state from that buffer
+        idx = np.random.randint(len(variational_buffer[w]))
+        batch.append((variational_buffer[w][idx], w))
+    return batch
+
+def variational_update(batch):
+    s, w = batch
+    logits, _ = d(torch.Tensor(s))
+    discriminator_loss = CE(logits, torch.LongTensor(w))
+    discriminator_optimizer.zero_grad()
+    discriminator_loss.backward()
+    discriminator_optimizer.step()
+    return discriminator_loss.item()
 
 step = 0
 ep = 0
@@ -105,15 +115,6 @@ for i in range(20000):
     ep_reward = 0
     ep_diversity_reward = 0
     # ep_extrinsic_reward = 0
-    goal_logprobs = clusters.log_prob(goals)
-    # calculate H(g)
-    log_pg = logsumexp(goal_logprobs, dim=1)
-    pg = logsumexp(log_pg).exp().item()
-    Hg =  - (log_pg.exp() * (log_pg - SKILL_ENT)).sum().item()
-    # calculate H(g|w)
-    goal_w_logprobs = goal_logprobs[:, w]
-    Hgw = - (goal_w_logprobs.exp() * goal_w_logprobs).sum().item()
-    goal_probs = goal_w_logprobs.exp().numpy()
     # rollout
     states = []
     rewards = []
@@ -139,24 +140,47 @@ for i in range(20000):
         # extrinsic_reward = -Hgw
         # extrinsic_reward = r[0]
         # total_reward = diversity_reward + 10*extrinsic_reward
-        total_reward = -Hgw * diversity_reward
+        total_reward = diversity_reward
         rewards.append(total_reward)
         # metrics
         ep_reward += total_reward
         ep_diversity_reward += diversity_reward
         # ep_extrinsic_reward += extrinsic_reward
-        variational_buffer.append((s, w))
+        variational_buffer[w].append(s)
         step += 1
-    # print(Hg, goal_w_logprobs.sum().item())
-    rewards[-1] += 10*Hg
+    ################################# CLUSTERING ###############################
+    if ep > 100:
+        s = list(variational_buffer[w])
+        trajs = torch.Tensor(np.stack(s))
+        mus[w] = trajs.mean(dim=0)
+        A = trajs - mus[w]
+        A = torch.matmul(A.t(), A) / trajs.shape[0]
+        vars_matrix[w] = torch.clamp(A , 1e-6)
+        clusters = MultivariateNormal(mus, vars_matrix)
+    # calculate goal information
+    goal_logprobs = clusters.log_prob(goals)
+    # calculate H(g)
+    log_pgw = logsumexp(goal_logprobs, dim=1)
+    pg = logsumexp(log_pgw).exp().item()
+    Hg =  - (log_pgw.exp() * (log_pgw - SKILL_ENT)).sum().item()
+    # calculate H(g|w)
+    goal_w_logprobs = goal_logprobs[:, w]
+    Hgw = - (goal_w_logprobs.exp() * goal_w_logprobs).sum().item()
+    # modify rewards
+    multiplier = (-Hgw + goal_w_logprobs.max() + Hg)
+    # multiplier = math.tanh(multiplier/2)
+    multiplier = 1 / (1 + math.exp(-multiplier))
+    multiplier += 0.1
+    rewards = [r * multiplier for r in rewards]
+    rewards[-1] += 10*Hg + 10*pg
     # metrics
     metrics['step'].append(step)
     metrics['rewards'].append(sum(rewards))
     metrics['diversity_rewards'].append(ep_diversity_reward)
-    # metrics['extrinsic_rewards'].append(ep_extrinsic_reward)
-    metrics['goal_entropy'].append(10*Hg)
+    metrics['extrinsic_rewards'].append(multiplier)
+    metrics['goal_entropy'].append(Hg)
     metrics['goal_prob'].append(pg)
-    metrics['goal_w_entropy'].append((Hgw, w))
+    metrics['goal_w_entropy'].append((-Hgw + goal_w_logprobs.max(), w))
     print("EPISODE ", ep, "REWARD = {:.2f}".format(sum(rewards)))
     ################################# RL ###############################
     rollout = (states, rewards, logprobs, entropies)
@@ -167,30 +191,11 @@ for i in range(20000):
     metrics['value'].append(value)
     ########################### Discriminator ##########################
     if ep > 100:
-        idxs = np.random.randint(len(variational_buffer), size=BATCH_SIZE)
-        batch = [variational_buffer[idx] for idx in idxs]
+        batch = sample_buffer()
         batch = zip(*batch)
         discriminator_loss = variational_update(batch)
         metrics['variational_loss'].append(discriminator_loss)
     ep += 1
-    if ep > 100:
-        ################################# CLUSTERING ###########################
-        if ep % 10 == 0:
-            s, w = zip(*list(variational_buffer))
-            samples = np.stack(s)
-            samples = torch.Tensor(samples)
-            w = torch.Tensor(w)
-            for sk in range(NB_SKILLS):
-                idxs = torch.where(w == sk)
-                trajs = samples[idxs]  # (-1, TRAJ_LEN, 2)
-                trajs = trajs.reshape(-1, STATE_DIM)  # (-1*TRAJ_LEN, 2)
-                mus[sk] = trajs.mean(dim=0)
-                A = trajs - mus[sk]
-                A = A*A
-                A = A.sum(dim=0) / (trajs.shape[0] - 1)
-                variances[sk] = torch.clamp(A , 1e-6)
-            vars_matrix = torch.stack([torch.diag(v) for v in variances])
-            clusters = MultivariateNormal(mus, vars_matrix)
     if max_running_reward < sum(metrics['rewards'][-10:])/10:
         print("NEW MAX RUNNING REWARD!: ", sum(metrics['rewards'][-10:])/10)
         max_running_reward = sum(metrics['rewards'][-10:])/10
