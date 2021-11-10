@@ -17,7 +17,7 @@ SEED = 123
 TASKS = [(1., 0.8), (0.33, 0.8), (-0.33, 0.8), (-1, 0.8)]
 
 policy_function = GaussianPolicyFunction(STATE_DIM + NB_SKILLS, 2)
-path = 'models/{}/{}/'.format(COND, len(TASKS))
+path = '../models/{}/{}/'.format(COND, len(TASKS))
 print("visualizing clusters from ", path)
 policy_function.load_state_dict(torch.load(path+'policy_seed{}.pth'.format(SEED)))
 policy = GaussianPolicy(policy_function)
@@ -41,9 +41,9 @@ for w in range(NB_SKILLS):
         states.append(s)
         s = torch.Tensor(np.concatenate((s, w_onehot)))
         # get action and logprobs
-        unscaled_action, logprob, entropy = policy.forward(*policy_function(s))
+        unscaled_action, logprob, entropy = policy.sample(s.unsqueeze(0))
         # step the environment
-        action = box.scale_action(unscaled_action.detach().numpy())
+        action = box.scale_action(unscaled_action.squeeze().detach().numpy())
         s, r, done = box.step(action)
     samples.append(np.stack(states))
 samples = torch.Tensor(np.stack(samples))
@@ -71,4 +71,4 @@ for i in range(NB_SKILLS):
         axes[i,j].set_title('Skill: ' + str(j-1) + ' total: {:.2f}'.format(Nk[j-1]))
         axes[i,j].set_xlim([-1,1])
         axes[i,j].set_ylim([-1,1])
-plt.savefig('imgs/{}/{}/clusters{}.png'.format(COND, len(TASKS), SEED))
+plt.savefig('../imgs/{}/{}/clusters{}.png'.format(COND, len(TASKS), SEED))

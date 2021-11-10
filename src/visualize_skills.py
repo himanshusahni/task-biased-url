@@ -11,7 +11,7 @@ import torch
 NB_SKILLS = 6
 COND = 'OUR'
 STATE_DIM = 2
-SEED = 123
+SEED = 456
 # TASKS = [(0.5, 0.8), (-0.5,0.8)]
 TASKS = [(1., 0.8), (0.33, 0.8), (-0.33, 0.8), (-1, 0.8)]
 # TASKS = [(0.8, 0.8), (0.8, -0.8), (-0.8, -0.8), (-0.8, 0.8)]
@@ -23,14 +23,15 @@ random.seed(SEED)
 torch.manual_seed(SEED)
 
 policy_function = GaussianPolicyFunction(STATE_DIM + NB_SKILLS, 2)
-path = '../models/{}/{}/reinforce_seed{}.pth'.format(COND, len(TASKS), SEED)
+path = '../models/{}/{}/best_reinforce_seed{}.pth'.format(COND, len(TASKS), SEED)
 print("visualizing policy from ", path)
 policy_function.load_state_dict(torch.load(path)['policy_func'])
 policy = GaussianPolicy(policy_function)
 box = BoxWorld()
 # run an episode with each value of w
 fig, ax = plt.subplots(figsize=(8,8))
-color = plt.cm.tab10(np.linspace(0, 1, NB_SKILLS))
+# color = plt.cm.tab10(np.linspace(0, 1, NB_SKILLS))
+color = ['r', 'b', 'k', 'g', 'y', 'm']
 ax.set_xlim([-1,1])
 ax.set_ylim([-1,1])
 ax.set_title("Skills")

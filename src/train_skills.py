@@ -27,7 +27,7 @@ NB_SKILLS = 6
 SKILL_ENT = -math.log(1/NB_SKILLS)
 
 COND = 'OUR'
-SEED = 123
+SEED = 456
 
 np.random.seed(SEED)
 random.seed(SEED)
@@ -91,6 +91,7 @@ variational_buffer = deque([], maxlen=10000)
 step = 0
 ep = 0
 
+max_running_reward = -10000
 # May have to eventually move to SAC if learning is not stable. But for DIYAN
 # looks good so far!
 for i in range(20000):
@@ -107,10 +108,8 @@ for i in range(20000):
     goal_logprobs = clusters.log_prob(goals)
     # calculate H(g)
     log_pg = logsumexp(goal_logprobs, dim=1)
-    pg = log_pg.exp().sum().item()
-    Hg =  - (log_pg.exp() * log_pg).sum().item()
-    # normalize probabilities for goals (sum to one over goals)
-    goal_logprobs -= logsumexp(goal_logprobs)
+    pg = logsumexp(log_pg).exp().item()
+    Hg =  - (log_pg.exp() * (log_pg - SKILL_ENT)).sum().item()
     # calculate H(g|w)
     goal_w_logprobs = goal_logprobs[:, w]
     Hgw = - (goal_w_logprobs.exp() * goal_w_logprobs).sum().item()
@@ -140,9 +139,7 @@ for i in range(20000):
         # extrinsic_reward = -Hgw
         # extrinsic_reward = r[0]
         # total_reward = diversity_reward + 10*extrinsic_reward
-        total_reward = diversity_reward
-        # if done:
-        #     total_reward += -Hgw + Hg
+        total_reward = -Hgw * diversity_reward
         rewards.append(total_reward)
         # metrics
         ep_reward += total_reward
@@ -150,6 +147,17 @@ for i in range(20000):
         # ep_extrinsic_reward += extrinsic_reward
         variational_buffer.append((s, w))
         step += 1
+    # print(Hg, goal_w_logprobs.sum().item())
+    rewards[-1] += 10*Hg
+    # metrics
+    metrics['step'].append(step)
+    metrics['rewards'].append(sum(rewards))
+    metrics['diversity_rewards'].append(ep_diversity_reward)
+    # metrics['extrinsic_rewards'].append(ep_extrinsic_reward)
+    metrics['goal_entropy'].append(10*Hg)
+    metrics['goal_prob'].append(pg)
+    metrics['goal_w_entropy'].append((Hgw, w))
+    print("EPISODE ", ep, "REWARD = {:.2f}".format(sum(rewards)))
     ################################# RL ###############################
     rollout = (states, rewards, logprobs, entropies)
     policy_loss, value_loss, value, entropy = reinforce.update(rollout)
@@ -165,35 +173,35 @@ for i in range(20000):
         discriminator_loss = variational_update(batch)
         metrics['variational_loss'].append(discriminator_loss)
     ep += 1
-    # if ep > 100:
-    #     ################################# CLUSTERING ###########################
-    #     if ep % 10 == 0:
-    #         w, s = zip(*list(variational_buffer))
-    #         samples = np.stack(s)
-    #         samples = torch.Tensor(samples)
-    #         w = torch.Tensor(w)
-    #         for sk in range(NB_SKILLS):
-    #             idxs = torch.where(w == sk)
-    #             trajs = samples[idxs]  # (-1, TRAJ_LEN, 2)
-    #             trajs = trajs.reshape(-1, STATE_DIM)  # (-1*TRAJ_LEN, 2)
-    #             mus[sk] = trajs.mean(dim=0)
-    #             A = trajs - mus[sk]
-    #             A = A*A
-    #             A = A.sum(dim=0) / (trajs.shape[0] - 1)
-    #             variances[sk] = torch.clamp(A , 1e-6)
-    #         vars_matrix = torch.stack([torch.diag(v) for v in variances])
-    #         clusters = MultivariateNormal(mus, vars_matrix)
-    # metrics
-    metrics['step'].append(step)
-    metrics['rewards'].append(ep_reward)
-    metrics['diversity_rewards'].append(ep_diversity_reward)
-    # metrics['extrinsic_rewards'].append(ep_extrinsic_reward)
-    metrics['goal_entropy'].append(Hg)
-    metrics['goal_prob'].append(pg)
-    metrics['goal_w_entropy'].append(Hgw)
-    print("EPISODE ", ep, "REWARD = {:.2f}".format(ep_reward))
+    if ep > 100:
+        ################################# CLUSTERING ###########################
+        if ep % 10 == 0:
+            s, w = zip(*list(variational_buffer))
+            samples = np.stack(s)
+            samples = torch.Tensor(samples)
+            w = torch.Tensor(w)
+            for sk in range(NB_SKILLS):
+                idxs = torch.where(w == sk)
+                trajs = samples[idxs]  # (-1, TRAJ_LEN, 2)
+                trajs = trajs.reshape(-1, STATE_DIM)  # (-1*TRAJ_LEN, 2)
+                mus[sk] = trajs.mean(dim=0)
+                A = trajs - mus[sk]
+                A = A*A
+                A = A.sum(dim=0) / (trajs.shape[0] - 1)
+                variances[sk] = torch.clamp(A , 1e-6)
+            vars_matrix = torch.stack([torch.diag(v) for v in variances])
+            clusters = MultivariateNormal(mus, vars_matrix)
+    if max_running_reward < sum(metrics['rewards'][-10:])/10:
+        print("NEW MAX RUNNING REWARD!: ", sum(metrics['rewards'][-10:])/10)
+        max_running_reward = sum(metrics['rewards'][-10:])/10
+        torch.save(reinforce.to_save(), '../models/{}/{}/best_reinforce_seed{}.pth'.format(
+            COND, len(TASKS), SEED))
+        torch.save(d.state_dict(), '../models/{}/{}/best_variational_seed{}.pth'.format(
+            COND, len(TASKS), SEED))
+        torch.save(clusters, '../models/{}/{}/best_clusters_seed{}.pth'.format(
+            COND, len(TASKS), SEED))
+    # save networks!
     if step % 1000 == 0:
-        # save networks!
         torch.save(reinforce.to_save(), '../models/{}/{}/reinforce_seed{}.pth'.format(
             COND, len(TASKS), SEED))
         torch.save(d.state_dict(), '../models/{}/{}/variational_seed{}.pth'.format(
