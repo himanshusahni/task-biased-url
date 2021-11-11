@@ -27,7 +27,7 @@ NB_SKILLS = 6
 SKILL_ENT = -math.log(1/NB_SKILLS)
 
 COND = 'OUR'
-SEED = 123
+SEED = 456
 
 np.random.seed(SEED)
 random.seed(SEED)
@@ -170,14 +170,14 @@ for i in range(20000):
     multiplier = (-Hgw + goal_w_logprobs.max() + Hg)
     # multiplier = math.tanh(multiplier/2)
     multiplier = 1 / (1 + math.exp(-multiplier))
-    multiplier += 0.1
+    multiplier += 0.01
     rewards = [r * multiplier for r in rewards]
     rewards[-1] += 10*Hg + 10*pg
     # metrics
     metrics['step'].append(step)
     metrics['rewards'].append(sum(rewards))
     metrics['diversity_rewards'].append(ep_diversity_reward)
-    metrics['extrinsic_rewards'].append(multiplier)
+    metrics['extrinsic_rewards'].append((multiplier, w))
     metrics['goal_entropy'].append(Hg)
     metrics['goal_prob'].append(pg)
     metrics['goal_w_entropy'].append((-Hgw + goal_w_logprobs.max(), w))

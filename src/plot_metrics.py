@@ -44,7 +44,9 @@ r = np.convolve(metrics['diversity_rewards'], np.ones(WINDOW)/WINDOW, mode='vali
 axarr[2,0].scatter(range(r.shape[0]), r)
 axarr[2,0].set_title("Diversity Reward")
 
-axarr[2,1].scatter(range(len(metrics['extrinsic_rewards'])), metrics['extrinsic_rewards'])
+multiplier, w = zip(*metrics['extrinsic_rewards'])
+color = ['r', 'b', 'k', 'g', 'y', 'm']
+axarr[2,1].scatter(x, multiplier, color=[color[i] for i in w])
 axarr[2,1].set_title("Reward Multiplier")
 # v = np.convolve(metrics['variational_loss'], np.ones(WINDOW)/WINDOW, mode='valid')
 # axarr[1,0].scatter(range(v.shape[0]), v)
