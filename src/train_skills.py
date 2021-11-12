@@ -27,14 +27,14 @@ NB_SKILLS = 6
 SKILL_ENT = -math.log(1/NB_SKILLS)
 
 COND = 'OUR'
-SEED = 456
+SEED = 123
 
 np.random.seed(SEED)
 random.seed(SEED)
 torch.manual_seed(SEED)
 
 box = BoxWorld()
-reinforce = REINFORCE(STATE_DIM + NB_SKILLS, 2)
+ppo = PPO(STATE_DIM + NB_SKILLS, 2, 2000)
 
 d = SkillDiscriminator(DIM, NB_SKILLS)
 discriminator_optimizer = optim.Adam(d.parameters(), lr=1e-4)
@@ -102,8 +102,13 @@ step = 0
 ep = 0
 
 max_running_reward = -10000
-# May have to eventually move to SAC if learning is not stable. But for DIYAN
-# looks good so far!
+# rollout
+states = []
+actions = []
+rewards = []
+logprobs = []
+policy_mus = []
+policy_logstds = []
 for i in range(20000):
     # sample a random skill
     w = np.random.randint(0, NB_SKILLS)
@@ -112,42 +117,38 @@ for i in range(20000):
     # reset environment
     s = box.reset()
     done = False
-    ep_reward = 0
     ep_diversity_reward = 0
-    # ep_extrinsic_reward = 0
-    # rollout
-    states = []
-    rewards = []
-    logprobs = []
-    entropies = []
+    ep_states = []
+    ep_rewards = []
     while not done:
         prev_s = s
         s = torch.Tensor(np.concatenate((s, w_onehot)))
-        states.append(s)
+        ep_states.append(s)
         # get action and logprobs
-        unscaled_action, logprob, entropy = reinforce.policy.sample(s.unsqueeze(0))
+        output = ppo.policy.forward(s.unsqueeze(0))
+        logprob = output['logprob']
         logprobs.append(logprob.squeeze())
-        entropies.append(entropy.squeeze())
+        policy_mus.append(output['mu'].squeeze())
+        policy_logstds.append(output['logstd'].squeeze())
         # step the environment
-        unscaled_action = unscaled_action.squeeze().detach().numpy()
-        action = box.scale_action(unscaled_action)
+        unscaled_action = output['action']
+        unscaled_action = unscaled_action.squeeze().detach()
+        actions.append(unscaled_action)
+        action = box.scale_action(unscaled_action.numpy())
         s, _, done = box.step(action)
         _, dr = d(torch.Tensor(s).unsqueeze(0))
         diversity_reward = dr[0,w].item() + SKILL_ENT
-        # compute extrinsic reward
-        # r = compute_rewards(prev_s, s)
-        # extrinsic_reward = np.dot(goal_probs, r)
-        # extrinsic_reward = -Hgw
-        # extrinsic_reward = r[0]
-        # total_reward = diversity_reward + 10*extrinsic_reward
-        total_reward = diversity_reward
-        rewards.append(total_reward)
+        extrinsic_reward = compute_rewards(prev_s, s)
+        total_reward = diversity_reward / 10
+        ep_rewards.append(total_reward)
         # metrics
-        ep_reward += total_reward
         ep_diversity_reward += diversity_reward
         # ep_extrinsic_reward += extrinsic_reward
         variational_buffer[w].append(s)
         step += 1
+    s = torch.Tensor(np.concatenate((s, w_onehot)))
+    ep_states.append(s)
+    ep += 1
     ################################# CLUSTERING ###############################
     if ep > 100:
         s = list(variational_buffer[w])
@@ -167,51 +168,60 @@ for i in range(20000):
     goal_w_logprobs = goal_logprobs[:, w]
     Hgw = - (goal_w_logprobs.exp() * goal_w_logprobs).sum().item()
     # modify rewards
-    multiplier = (-Hgw + goal_w_logprobs.max() + Hg)
+    multiplier = (-Hgw + goal_w_logprobs.max().item())
     # multiplier = math.tanh(multiplier/2)
-    multiplier = 1 / (1 + math.exp(-multiplier))
-    multiplier += 0.01
-    rewards = [r * multiplier for r in rewards]
-    rewards[-1] += 10*Hg + 10*pg
+    # multiplier = 1 / (1 + math.exp(-multiplier))
+    # multiplier += 1
+    # modify rewards in retrospect
+    ep_rewards = [r * multiplier for r in ep_rewards]
+    ep_rewards[-1] += Hg + pg
+    states.append(torch.stack(ep_states))
+    rewards.append(torch.Tensor(ep_rewards))
     # metrics
     metrics['step'].append(step)
-    metrics['rewards'].append(sum(rewards))
+    metrics['rewards'].append(sum(ep_rewards))
     metrics['diversity_rewards'].append(ep_diversity_reward)
     metrics['extrinsic_rewards'].append((multiplier, w))
     metrics['goal_entropy'].append(Hg)
     metrics['goal_prob'].append(pg)
-    metrics['goal_w_entropy'].append((-Hgw + goal_w_logprobs.max(), w))
-    print("EPISODE ", ep, "REWARD = {:.2f}".format(sum(rewards)))
+    metrics['goal_w_entropy'].append((-Hgw + goal_w_logprobs.max().item(), w))
+    print("EPISODE ", ep, "REWARD = {:.2f}".format(sum(ep_rewards)))
     ################################# RL ###############################
-    rollout = (states, rewards, logprobs, entropies)
-    policy_loss, value_loss, value, entropy = reinforce.update(rollout)
-    metrics['policy_loss'].append(policy_loss)
-    metrics['value_loss'].append(value_loss)
-    metrics['entropy'].append(entropy)
-    metrics['value'].append(value)
+    if ep % 10 == 0:
+        rollout = (states, actions, rewards, logprobs, policy_mus, policy_logstds)
+        policy_loss, value_loss, value, entropy = ppo.update(rollout)
+        metrics['policy_loss'].append(policy_loss)
+        metrics['value_loss'].append(value_loss)
+        metrics['entropy'].append(entropy)
+        metrics['value'].append(value)
+        states = []
+        actions = []
+        rewards = []
+        logprobs = []
+        policy_mus = []
+        policy_logstds = []
     ########################### Discriminator ##########################
     if ep > 100:
         batch = sample_buffer()
         batch = zip(*batch)
         discriminator_loss = variational_update(batch)
         metrics['variational_loss'].append(discriminator_loss)
-    ep += 1
     if max_running_reward < sum(metrics['rewards'][-10:])/10:
         print("NEW MAX RUNNING REWARD!: ", sum(metrics['rewards'][-10:])/10)
         max_running_reward = sum(metrics['rewards'][-10:])/10
-        torch.save(reinforce.to_save(), '../models/{}/{}/best_reinforce_seed{}.pth'.format(
+        torch.save(ppo.to_save(), '../models/{}/{}/ppo/best_ppo_seed{}.pth'.format(
             COND, len(TASKS), SEED))
-        torch.save(d.state_dict(), '../models/{}/{}/best_variational_seed{}.pth'.format(
+        torch.save(d.state_dict(), '../models/{}/{}/ppo/best_variational_seed{}.pth'.format(
             COND, len(TASKS), SEED))
-        torch.save(clusters, '../models/{}/{}/best_clusters_seed{}.pth'.format(
+        torch.save(clusters, '../models/{}/{}/ppo/best_clusters_seed{}.pth'.format(
             COND, len(TASKS), SEED))
     # save networks!
     if step % 1000 == 0:
-        torch.save(reinforce.to_save(), '../models/{}/{}/reinforce_seed{}.pth'.format(
+        torch.save(ppo.to_save(), '../models/{}/{}/ppo/ppo_seed{}.pth'.format(
             COND, len(TASKS), SEED))
-        torch.save(d.state_dict(), '../models/{}/{}/variational_seed{}.pth'.format(
+        torch.save(d.state_dict(), '../models/{}/{}/ppo/variational_seed{}.pth'.format(
             COND, len(TASKS), SEED))
-        torch.save(clusters, '../models/{}/{}/clusters_seed{}.pth'.format(
+        torch.save(clusters, '../models/{}/{}/ppo/clusters_seed{}.pth'.format(
             COND, len(TASKS), SEED))
-        pickle.dump(metrics, open('../models/{}/{}/metrics_seed{}.pkl'.format(
+        pickle.dump(metrics, open('../models/{}/{}/ppo/metrics_seed{}.pkl'.format(
             COND, len(TASKS), SEED), 'wb'))
