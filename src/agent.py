@@ -24,7 +24,8 @@ class GaussianPolicyFunction(nn.Module):
         """return: action between [-1,1]"""
         x = F.leaky_relu(self.fc1(x), 0.2)
         x = F.leaky_relu(self.fc2(x), 0.2)
-        return torch.tanh(self.mu_out(x)), F.softplus(self.sigma_out(x))
+        # return torch.tanh(self.mu_out(x)), F.softplus(self.sigma_out(x))
+        return torch.tanh(self.mu_out(x)), torch.tanh(self.sigma_out(x))
 
 
 class DiscretePolicyFunction(nn.Module):
@@ -105,8 +106,10 @@ class GaussianPolicy:
     def forward(self, s, action=None):
         """sample actions (unless actions are given),
         and calculate mu, std, logprob, and entropy"""
-        mu, std = self.policy_func(s)
-        dist = Normal(mu, std)
+        mu, logstd = self.policy_func(s)
+        # logstd = 0.5*(logstd + 1)  #0->1
+        # logstd = 4*logstd - 3  #-3->1
+        dist = Normal(mu, logstd.exp())
         if action is None:
             action = dist.rsample()
             action = action.detach()
@@ -116,7 +119,7 @@ class GaussianPolicy:
                 'logprob': logprob,
                 'entropy': entropy,
                 'mu': mu,
-                'std': std,}
+                'std': logstd.exp(),}
 
 
 class DiscretePolicy:
@@ -139,17 +142,17 @@ def logsumexp(x, dim=0):
 
 class REINFORCE:
 
-    def __init__(self, state_dim, action_dim):
+    def __init__(self, state_dim, action_dim, device):
         # policy
-        self.policy_func = GaussianPolicyFunction(state_dim, action_dim)
+        self.policy_func = GaussianPolicyFunction(state_dim, action_dim).to(device)
         self.policy_optimizer = optim.Adam(self.policy_func.parameters(), lr=1e-4)
         self.policy = GaussianPolicy(self.policy_func)
         # value
-        self.value_function = ValueFunction(state_dim)
+        self.value_function = ValueFunction(state_dim).to(device)
         self.value_optimizer = optim.Adam(self.value_function.parameters(), lr=1e-3)
         # misc
         self.gamma = 0.99
-        self.entropy_coeff = 0.001
+        self.entropy_coeff = 0.01
 
     def to_save(self):
         return {
@@ -163,24 +166,30 @@ class REINFORCE:
         """
         rollout consists of a tuple of lists of (states(+w), rewards, logprobs, entropies)
         """
-        states, rewards, logprobs, entropies = rollout
+        states = rollout['states']
+        actions = rollout['actions']
+        rewards = rollout['rewards']
+        dones = rollout['dones']
         # calculate discounted return for each step at end of episode.
-        rewards = np.flip(np.array(rewards))
-        R = [rewards[0]]
-        for i in range(1, len(rewards)):
-            R.append(rewards[i] + self.gamma* R[i-1])
-        R = np.flip(np.array(R))
-        rewards = np.flip(rewards)
+        R = torch.zeros_like(rewards)
+        R[:,-1] = rewards[:,-1]
+        for i in reversed(range(rewards.shape[1] - 1)):
+            R[:,i] = rewards[:,i] + self.gamma * R[:,i+1] * (1 - dones[:,i])
         # calculate single step value target
-        values = self.value_function(torch.stack(states)).squeeze()
-        targets = rewards[:-1] + self.gamma * values[1:].detach().numpy()
-        targets = np.append(targets, rewards[-1])
+        values = self.value_function(states).squeeze()
+        targets = rewards + self.gamma * values[:,1:].detach()
+        values = values[:,:-1]
+        # calculate log probabilities of actions
+        output = self.policy.forward(states[:,:-1], actions)
+        logprobs = output['logprob'].flatten()
+        entropy = output['entropy']
         # REINFORCE
-        value_loss = (values - torch.Tensor(targets))**2
+        value_loss = (values - targets)**2
         value_loss = value_loss.mean()
-        R = R - values.detach().numpy()
-        policy_loss = - sum([R[i]*logprobs[i] for i in range(len(R))])/len(R)
-        entropy_loss = - sum(entropies)/len(entropies)
+        R = R - values.detach()
+        R = R.flatten()
+        policy_loss = - (R * logprobs).mean()
+        entropy_loss = - entropy.mean()
         loss = value_loss + policy_loss + self.entropy_coeff * entropy_loss
         self.policy_optimizer.zero_grad()
         self.value_optimizer.zero_grad()
@@ -303,6 +312,7 @@ class SAC:
         self.alpha_optimizer.step()
         return policy_loss.item(), qvalue_loss.item(), self.alpha.item(), entropy.mean().item(), (-logprob_a / 2).mean().item(), q_s.mean().item()
 
+
 class PPO:
 
     def __init__(self, state_dim, action_dim, max_train_steps, device):
@@ -327,19 +337,20 @@ class PPO:
         self.train_steps = 0
 
         self.gamma = 0.99
-        self.entropy_coeff = 0.01
-        self.ppo_epochs = 50
+        self.entropy_coeff = 0.001
+        self.ppo_epochs = 80
         self.l = 0.95
         self.start_clip_param = 0.2
         self.end_clip_param = 0.05
-        self.target_kl = 0.1
+        self.target_kl = 0.05
         self.batch_size = 256
 
     @property
     def clip_param(self):
-        return self.start_clip_param +\
-            (self.end_clip_param - self.start_clip_param) *\
-            self.train_steps / self.max_train_steps
+        # return self.start_clip_param +\
+        #     (self.end_clip_param - self.start_clip_param) *\
+        #     self.train_steps / self.max_train_steps
+        return self.start_clip_param
 
     def to_save(self):
         return {
@@ -364,9 +375,12 @@ class PPO:
         d = rollout['dones']
         # get value estimate
         values = self.value_function(s).squeeze().detach()
+        # as an approximation, replace values of after terminal states with
+        # the last states's value (instead of 0)
+        values[:,1:] = values[:,1:] * (1 - d) + values[:,:-1] * d
         adv = torch.zeros_like(values)
         for i in reversed(range(r.shape[1])):
-            delta = r[:,i] + self.gamma * values[:,i+1] * (1 - d[:,i]) - values[:,i]
+            delta = r[:,i] + self.gamma * values[:,i+1] - values[:,i]
             adv[:,i] = delta + self.gamma * self.l * adv[:,i+1] * (1 - d[:,i])
         adv = adv[:,:-1].flatten()
         values = values[:,:-1].flatten()
@@ -378,11 +392,11 @@ class PPO:
         mus = output['mu'].squeeze().detach()
         logstds = output['std'].squeeze().detach().log()
         # # standardize advantage
-        # adv = (adv - adv.mean()) / (adv.std() + 1e-6)
+        adv = (adv - adv.mean()) / (adv.std() + 1e-6)
         epoch = 0
         kldiv = 0
         avg_policy_loss = 0
-        while epoch < self.ppo_epochs and kldiv < 1.5 * self.target_kl:
+        while epoch < self.ppo_epochs and kldiv < self.target_kl:
             # sample a minibatch to learn from
             idxs = np.random.randint(s.shape[0], size=(self.batch_size,))
             s_b = s[idxs]
@@ -416,12 +430,14 @@ class PPO:
             nn.utils.clip_grad_norm_(self.value_function.parameters(), 0.5)
             self.value_optimizer.step()
             # calculate kl divergence of new policy vs. old
-            kldiv = logstds_b - new_logstds +\
-                    0.5 * (new_logstds.exp()/logstds_b.exp())**2 +\
-                    0.5 * ((mus_b - new_mus) / logstds_b.exp())**2 - 0.5
-            kldiv = kldiv.sum(dim=-1).mean().item()
+            # kldiv = logstds_b - new_logstds +\
+            #         0.5 * (new_logstds.exp()/logstds_b.exp())**2 +\
+            #         0.5 * ((mus_b - new_mus) / logstds_b.exp())**2 - 0.5
+            # kldiv = kldiv.sum(dim=-1).mean().item()
+            kldiv = (logprobs_b - new_logprobs).mean().item()
             epoch += 1
             avg_policy_loss += policy_loss.mean().item()
+        print(epoch)
         self.policy_func.load_state_dict(self.policy_func_new.state_dict())
         avg_policy_loss /= epoch
         self.train_steps += 1
