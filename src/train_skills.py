@@ -1,6 +1,5 @@
 import numpy as np
 from collections import deque
-import random
 import pickle
 
 from boxenv import *
@@ -9,7 +8,6 @@ from agent import *
 import torch.optim as optim
 from torch.distributions.multivariate_normal import MultivariateNormal
 
-GAMMA = 0.99
 ENTROPY_COEFF = 0.001
 EPS = 1e-6
 BATCH_SIZE = 64
@@ -30,7 +28,6 @@ COND = 'OUR'
 SEED = 123
 
 np.random.seed(SEED)
-random.seed(SEED)
 torch.manual_seed(SEED)
 
 box = BoxWorld()
@@ -126,8 +123,7 @@ for i in range(20000):
         ep_states.append(s)
         # get action and logprobs
         output = ppo.policy.forward(s.unsqueeze(0))
-        logprob = output['logprob']
-        logprobs.append(logprob.squeeze())
+        logprobs.append(output['logprob'].squeeze())
         policy_mus.append(output['mu'].squeeze())
         policy_logstds.append(output['logstd'].squeeze())
         # step the environment
@@ -171,10 +167,11 @@ for i in range(20000):
     multiplier = (-Hgw + goal_w_logprobs.max().item())
     # multiplier = math.tanh(multiplier/2)
     # multiplier = 1 / (1 + math.exp(-multiplier))
-    # multiplier += 1
+    # multiplier += 0.01
     # modify rewards in retrospect
     ep_rewards = [r * multiplier for r in ep_rewards]
     ep_rewards[-1] += Hg + pg
+
     states.append(torch.stack(ep_states))
     rewards.append(torch.Tensor(ep_rewards))
     # metrics
@@ -206,22 +203,16 @@ for i in range(20000):
         batch = zip(*batch)
         discriminator_loss = variational_update(batch)
         metrics['variational_loss'].append(discriminator_loss)
+    ################################  SAVING ###################################
+    path = '../models/{}/{}/ppo/'.format(COND, len(TASKS))
     if max_running_reward < sum(metrics['rewards'][-10:])/10:
         print("NEW MAX RUNNING REWARD!: ", sum(metrics['rewards'][-10:])/10)
         max_running_reward = sum(metrics['rewards'][-10:])/10
-        torch.save(ppo.to_save(), '../models/{}/{}/ppo/best_ppo_seed{}.pth'.format(
-            COND, len(TASKS), SEED))
-        torch.save(d.state_dict(), '../models/{}/{}/ppo/best_variational_seed{}.pth'.format(
-            COND, len(TASKS), SEED))
-        torch.save(clusters, '../models/{}/{}/ppo/best_clusters_seed{}.pth'.format(
-            COND, len(TASKS), SEED))
-    # save networks!
+        torch.save(ppo.to_save(), path+'best_ppo_seed{}.pth'.format(SEED))
+        torch.save(d.state_dict(), path+'best_variational_seed{}.pth'.format(SEED))
+        torch.save(clusters, path+'best_clusters_seed{}.pth'.format(SEED))
     if step % 1000 == 0:
-        torch.save(ppo.to_save(), '../models/{}/{}/ppo/ppo_seed{}.pth'.format(
-            COND, len(TASKS), SEED))
-        torch.save(d.state_dict(), '../models/{}/{}/ppo/variational_seed{}.pth'.format(
-            COND, len(TASKS), SEED))
-        torch.save(clusters, '../models/{}/{}/ppo/clusters_seed{}.pth'.format(
-            COND, len(TASKS), SEED))
-        pickle.dump(metrics, open('../models/{}/{}/ppo/metrics_seed{}.pkl'.format(
-            COND, len(TASKS), SEED), 'wb'))
+        torch.save(ppo.to_save(), path+'ppo_seed{}.pth'.format(SEED))
+        torch.save(d.state_dict(), path+'variational_seed{}.pth'.format(SEED))
+        torch.save(clusters, path+'clusters_seed{}.pth'.format(SEED))
+        pickle.dump(metrics, open(path+'metrics_seed{}.pkl'.format(SEED), 'wb'))
