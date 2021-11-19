@@ -13,10 +13,19 @@ SEED = 123
 random_state = np.random.RandomState(SEED)
 torch.manual_seed(SEED)
 
-env = suite.load('cartpole', 'swingup', task_kwargs={'random':random_state})
+env = suite.load('quadruped', 'walk',
+                 task_kwargs={'random':random_state})
+# env = suite.load('cartpole', 'swingup',
+#                   task_kwargs={'random':random_state})
 action_spec = env.action_spec()
 obs_spec = env.observation_spec()
-STATE_DIM = obs_spec['position'].shape[0] + obs_spec['velocity'].shape[0]
+time_step = env.reset()
+obs = time_step.observation
+obs['torso_upright'] = np.expand_dims(obs['torso_upright'],0)
+obs = np.concatenate([obs[k] for k in obs.keys()])
+# obs = np.concatenate((time_step.observation['position'],
+                      # time_step.observation['velocity']))
+STATE_DIM = obs.shape[0]
 ACTION_DIM = action_spec.shape[0]
 
 def scale_action(unscaled_action, action_spec):
@@ -25,12 +34,13 @@ def scale_action(unscaled_action, action_spec):
     action += action_spec.minimum
     return action
 
-ppo = PPO(STATE_DIM, ACTION_DIM, 0)
+ppo = PPO(STATE_DIM, ACTION_DIM, 0, 'cpu')
 best = 1
+algo = 'ppo'
 if best:
-    path = '../models/mujoco/pendulum/ppo/best_ppo_seed{}.pth'.format(SEED)
+    path = '../models/mujoco/ant/{}/best_{}_seed{}.pth'.format(algo, algo, SEED)
 else:
-    path = '../models/mujoco/pendulum/ppo/ppo_seed{}.pth'.format(SEED)
+    path = '../models/mujoco/ant/{}/{}_seed{}.pth'.format(algo, algo, SEED)
 print("visualizing policy from ", path)
 ppo.policy_func.load_state_dict(torch.load(path)['policy_func'])
 
@@ -58,8 +68,11 @@ frames = []
 time_step = env.reset()
 while not time_step.last():
     # build observation
-    obs = np.concatenate((time_step.observation['position'],
-                          time_step.observation['velocity']))
+    # obs = np.concatenate((time_step.observation['position'],
+    #                       time_step.observation['velocity']))
+    obs = time_step.observation
+    obs['torso_upright'] = np.expand_dims(obs['torso_upright'],0)
+    obs = np.concatenate([obs[k] for k in obs.keys()])
     obs = torch.Tensor(obs)
     output = ppo.policy.forward(obs.unsqueeze(0))
     unscaled_action = output['action'].squeeze(-1).detach()

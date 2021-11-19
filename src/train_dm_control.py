@@ -9,27 +9,35 @@ import time
 import torch
 import torch.multiprocessing as mp
 
-from agent import PPO, GaussianPolicy
+from agent import PPO, GaussianPolicy, REINFORCE
 
 
 SEED = 123
 NB_THREADS = 4
 NB_ROLLOUT_STEPS = 1000
-MAX_TRAIN_STEP = 10000
-DEVICE = 'cpu'
+MAX_TRAIN_STEP = 50000
+DEVICE = 'cuda:0'
 
 np.random.seed(SEED)
 torch.manual_seed(SEED)
 
 def make_env():
     random_state = np.random.RandomState(np.random.randint(1000))
-    return suite.load('cartpole', 'swingup',
+    # return suite.load('cartpole', 'swingup',
+    #                   task_kwargs={'random':random_state})
+    return suite.load('quadruped', 'walk',
                       task_kwargs={'random':random_state})
 
 env = make_env()
 action_spec = env.action_spec()
 obs_spec = env.observation_spec()
-STATE_DIM = obs_spec['position'].shape[0] + obs_spec['velocity'].shape[0]
+time_step = env.reset()
+obs = time_step.observation
+obs['torso_upright'] = np.expand_dims(obs['torso_upright'],0)
+obs = np.concatenate([obs[k] for k in obs.keys()])
+# obs = np.concatenate((time_step.observation['position'],
+#                       time_step.observation['velocity']))
+STATE_DIM = obs.shape[0]
 ACTION_DIM = action_spec.shape[0]
 
 
@@ -55,20 +63,31 @@ class Clone:
             for step in range(self.nb_rollout_steps):
                 if done:
                     time_step = self.env.reset()
-                    obs = np.concatenate((time_step.observation['position'],
-                                          time_step.observation['velocity']))
+                    # obs = np.concatenate((time_step.observation['position'],
+                    #                       time_step.observation['velocity']))
+                    obs = time_step.observation
+                    obs['torso_upright'] = np.expand_dims(obs['torso_upright'],0)
+                    obs = np.concatenate([obs[k] for k in obs.keys()])
                     obs = torch.Tensor(obs).to(DEVICE)
+                    ep_steps = 0
                 output = self.policy.forward(obs.unsqueeze(0))
                 unscaled_action = output['action'].squeeze(-1).detach()
                 action = self.scale_action(unscaled_action.cpu().numpy())
                 time_step = self.env.step(action)
+                ep_steps += 1
+                # if ep_steps > 255:
+                #     done = True
+                # else:
                 done = time_step.last()
                 self.rollout['states'][self.t, step] = obs
                 self.rollout['actions'][self.t, step] = unscaled_action
                 self.rollout['rewards'][self.t, step] = time_step.reward
                 self.rollout['dones'][self.t, step] = float(done)
-                obs = np.concatenate((time_step.observation['position'],
-                                      time_step.observation['velocity']))
+                # obs = np.concatenate((time_step.observation['position'],
+                #                       time_step.observation['velocity']))
+                obs = time_step.observation
+                obs['torso_upright'] = np.expand_dims(obs['torso_upright'],0)
+                obs = np.concatenate([obs[k] for k in obs.keys()])
                 obs = torch.Tensor(obs).to(DEVICE)
             self.rollout['states'][self.t, step+1] = obs
             stopq.put(self.t)
@@ -94,6 +113,8 @@ if __name__ == '__main__':
     mp.set_start_method("spawn")
     ppo = PPO(STATE_DIM, ACTION_DIM, MAX_TRAIN_STEP, DEVICE)
     ppo.policy_func.share_memory()
+    # reinforce = REINFORCE(STATE_DIM, ACTION_DIM, DEVICE)
+    # reinforce.policy_func.share_memory()
 
     metrics = {'rewards': [],
                'policy_loss': [],
@@ -132,7 +153,7 @@ if __name__ == '__main__':
         print("STEP ", step, "TIME = {:.2f}, STEP REWARD = {:.2f}".format(
             time.time()-start_time, metrics['rewards'][-1]))
         ################################  SAVING ###################################
-        path = '../models/mujoco/pendulum/ppo/'
+        path = '../models/mujoco/ant/ppo/'
         if max_running_reward < sum(metrics['rewards'][-10:])/10:
             print("NEW MAX RUNNING REWARD!: ", sum(metrics['rewards'][-10:])/10)
             max_running_reward = sum(metrics['rewards'][-10:])/10
@@ -140,6 +161,7 @@ if __name__ == '__main__':
         if step % 10 == 0:
             torch.save(ppo.to_save(), path+'ppo_seed{}.pth'.format(SEED))
             pickle.dump(metrics, open(path+'metrics_seed{}.pkl'.format(SEED), 'wb'))
-# terminate all processes
+    # terminate all processes
     for p in procs:
         p.terminate()
+    del rollout
